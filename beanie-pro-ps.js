@@ -228,6 +228,30 @@
                 </div>
             </div>
         </div>
+        <div id="br-tabs" style="display:flex; gap:8px; padding:12px 16px; border-bottom:1px solid rgba(255,255,255,0.06);">
+  <button id="br-tab-servers" style="flex:1; padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,0.10); background:rgba(255,255,255,0.06); color:#fff; cursor:pointer; font-weight:900;">
+    Servers
+  </button>
+  <button id="br-tab-friends" style="flex:1; padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,0.10); background:rgba(255,255,255,0.02); color:rgba(255,255,255,0.85); cursor:pointer; font-weight:900;">
+    Friends Online
+  </button>
+</div>
+
+<div id="br-view-servers" style="display:block;">
+  <div id="br-list"></div>
+</div>
+
+<div id="br-view-friends" style="display:none; padding:16px; overflow:auto; flex:1;">
+  <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px;">
+    <div id="br-friends-status" style="font-size:12px; opacity:0.7;">Idle.</div>
+    <button id="br-friends-refresh" class="icon-btn" title="Refresh friends presence"
+      style="margin-left:auto; border:1px solid rgba(255,255,255,0.10); background:rgba(255,255,255,0.03); width:auto; padding:0 10px;">
+      Refresh
+    </button>
+  </div>
+  <div id="br-friends-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+</div>
+
         
         <div id="br-settings-panel" style="position:absolute; inset:0; background:#0f1116; z-index:30; transform:translateX(100%); transition:0.4s; padding:24px;">
             <div style="display:flex;justify-content:space-between;margin-bottom:28px">
@@ -322,7 +346,6 @@
                 </div>
             </div>
         </div>
-        <div id="br-list"></div>
         <div id="br-notify">Notification</div>
     `;
       document[_0x45b8(0x133)][_0x45b8(0x10f)](_0x13d540);
@@ -341,6 +364,192 @@
 
         }
       }, 0);
+
+// ===== Friends Online in SAB (tab) =====
+(function () {
+  const SAB_PLACE_ID = 109983668079237;
+
+  function $(id) { return document.getElementById(id); }
+
+  function setFriendsStatus(t) {
+    const el = $("br-friends-status");
+    if (el) el.innerText = t;
+  }
+
+  async function getMeId() {
+    const res = await fetch("https://users.roblox.com/v1/users/authenticated", { credentials: "include" });
+    if (!res.ok) throw new Error("Not logged in.");
+    const me = await res.json();
+    return me.id;
+  }
+
+  // Uses paginated FindFriends endpoint (authenticated web)
+  async function fetchAllFriends(userId, limit = 1200) {
+    const out = [];
+    let cursor = "";
+
+    while (out.length < limit) {
+      const url =
+        `https://friends.roblox.com/v1/users/${userId}/friends/find?limit=50` +
+        (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error(`Friends list failed (${res.status}).`);
+
+      const json = await res.json();
+      const items = json.PageItems || json.data || [];
+      for (const it of items) out.push(it);
+
+      cursor = json.NextCursor || json.nextPageCursor || json.nextCursor || "";
+      if (!cursor || items.length === 0) break;
+    }
+
+    return out;
+  }
+
+  // Presence batch: https://presence.roblox.com/v1/presence/users
+  async function presenceBatch(userIds) {
+    // gentle retry on 429
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const res = await fetch("https://presence.roblox.com/v1/presence/users", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userIds })
+      });
+
+      if (res.status === 429) {
+        await new Promise(r => setTimeout(r, 1000 * (2 ** attempt)));
+        continue;
+      }
+      if (!res.ok) throw new Error(`Presence failed (${res.status}).`);
+
+      const json = await res.json();
+      return Array.isArray(json.userPresences) ? json.userPresences : [];
+    }
+    throw new Error("Rate limited (429). Try again later.");
+  }
+
+  function renderFriendsOnline(rows) {
+    const host = $("br-friends-list");
+    if (!host) return;
+
+    if (!rows.length) {
+      host.innerHTML = `<div style="opacity:0.65; font-size:12px;">No friends currently detected in SAB.</div>`;
+      return;
+    }
+
+    host.innerHTML = rows.map(r => {
+      const name = (r.displayName || r.userName || `User ${r.userId}`);
+      const loc = (r.lastLocation || "In game");
+      const canJoinServer = !!r.gameInstanceId; // if present
+      const joinHref = canJoinServer
+        ? `roblox://experiences/start?placeId=${SAB_PLACE_ID}&gameInstanceId=${encodeURIComponent(r.gameInstanceId)}`
+        : `roblox://experiences/start?placeId=${SAB_PLACE_ID}`;
+
+      return `
+        <div style="padding:12px; border-radius:14px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02);">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div style="font-weight:900; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</div>
+            <a href="${joinHref}" style="text-decoration:none;">
+              <button class="join-btn" style="padding:10px 12px; font-size:12px; border-radius:12px;">
+                ${canJoinServer ? "JOIN" : "OPEN SAB"}
+              </button>
+            </a>
+          </div>
+          <div style="margin-top:6px; font-size:11px; opacity:0.75;">${loc}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  async function refreshFriendsOnline() {
+    setFriendsStatus("Loading…");
+
+    const meId = await getMeId();
+    setFriendsStatus("Fetching friends…");
+    const friends = await fetchAllFriends(meId, 1500);
+
+    setFriendsStatus(`Checking presence (${friends.length})…`);
+    const ids = friends.map(f => f.id).filter(Boolean);
+
+    const chunkSize = 50;
+    const presences = [];
+
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const p = await presenceBatch(chunk);
+      presences.push(...p);
+      setFriendsStatus(`Checking presence… ${Math.min(i + chunkSize, ids.length)}/${ids.length}`);
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // Filter: in-game and in SAB
+    // Presence docs indicate presence types and fields like placeId/gameId/lastLocation. :contentReference[oaicite:3]{index=3}
+    const inSab = presences
+      .filter(p => p && p.userPresenceType === 2 && (p.placeId === SAB_PLACE_ID || p.rootPlaceId === SAB_PLACE_ID))
+      .map(p => ({
+        userId: p.userId,
+        userName: p.userName,
+        displayName: p.displayName,
+        lastLocation: p.lastLocation,
+        gameInstanceId: p.gameId || p.gameInstanceId || null // presence commonly uses gameId for jobId
+      }));
+
+    // Sort: stable-ish by lastLocation/name
+    inSab.sort((a, b) => (a.displayName || a.userName || "").localeCompare(b.displayName || b.userName || ""));
+
+    renderFriendsOnline(inSab);
+    setFriendsStatus(`Online in SAB: ${inSab.length}`);
+  }
+
+  function setTab(which) {
+    const serversBtn = $("br-tab-servers");
+    const friendsBtn = $("br-tab-friends");
+    const serversView = $("br-view-servers");
+    const friendsView = $("br-view-friends");
+
+    const activeCss = "background:rgba(255,255,255,0.06); color:#fff;";
+    const idleCss = "background:rgba(255,255,255,0.02); color:rgba(255,255,255,0.85);";
+
+    if (which === "friends") {
+      if (serversView) serversView.style.display = "none";
+      if (friendsView) friendsView.style.display = "block";
+      if (serversBtn) serversBtn.style.cssText += activeCss;
+      if (friendsBtn) friendsBtn.style.cssText += activeCss;
+      if (serversBtn) serversBtn.style.cssText = serversBtn.style.cssText.replace(activeCss, idleCss);
+    } else {
+      if (serversView) serversView.style.display = "block";
+      if (friendsView) friendsView.style.display = "none";
+      if (friendsBtn) friendsBtn.style.cssText = friendsBtn.style.cssText.replace(activeCss, idleCss);
+      if (serversBtn) serversBtn.style.cssText += activeCss;
+    }
+  }
+
+  // wire up
+  setTimeout(() => {
+    const serversBtn = $("br-tab-servers");
+    const friendsBtn = $("br-tab-friends");
+    const refreshBtn = $("br-friends-refresh");
+
+    if (serversBtn) serversBtn.onclick = () => setTab("servers");
+    if (friendsBtn) friendsBtn.onclick = () => {
+      setTab("friends");
+      refreshFriendsOnline().catch(e => {
+        console.error(e);
+        setFriendsStatus(`Error: ${e.message}`);
+      });
+    };
+
+    if (refreshBtn) refreshBtn.onclick = () => {
+      refreshFriendsOnline().catch(e => {
+        console.error(e);
+        setFriendsStatus(`Error: ${e.message}`);
+      });
+    };
+  }, 0);
+})();
+
 
 // ===== Inactive Friends Scanner (local last-seen tracking) =====
 window.__brFriendsScanInFlight = false;

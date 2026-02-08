@@ -432,11 +432,6 @@
 
   function renderFriendsOnline(rows) {
     const host = $("br-friends-list");
-    const label =
-  r.displayName ||
-  r.name ||
-  `User ${r.userId}`;
-
     if (!host) return;
 
     if (!rows.length) {
@@ -445,7 +440,7 @@
     }
 
     host.innerHTML = rows.map(r => {
-      const name = (r.displayName || r.userName || `User ${r.userId}`);
+      const label = (r.displayName || r.name || `User ${r.userId}`);
       const loc = (r.lastLocation || "In game");
       const canJoinServer = !!r.gameInstanceId; // if present
       const joinHref = canJoinServer

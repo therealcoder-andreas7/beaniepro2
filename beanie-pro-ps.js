@@ -432,6 +432,11 @@
 
   function renderFriendsOnline(rows) {
     const host = $("br-friends-list");
+    const label =
+  r.displayName ||
+  r.name ||
+  `User ${r.userId}`;
+
     if (!host) return;
 
     if (!rows.length) {
@@ -450,7 +455,7 @@
       return `
         <div style="padding:12px; border-radius:14px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02);">
           <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
-            <div style="font-weight:900; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</div>
+            <div style="font-weight:900; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${label}</div>
             <a href="${joinHref}" style="text-decoration:none;">
               <button class="join-btn" style="padding:10px 12px; font-size:12px; border-radius:12px;">
                 ${canJoinServer ? "JOIN" : "OPEN SAB"}
@@ -470,6 +475,18 @@
     setFriendsStatus("Fetching friends…");
     const friends = await fetchAllFriends(meId, 1500);
 
+
+// 🔹 Build id → name map
+const friendById = new Map(
+  friends.map(f => [
+    String(f.id),
+    {
+      name: f.name,
+      displayName: f.displayName
+    }
+  ])
+);
+
     setFriendsStatus(`Checking presence (${friends.length})…`);
     const ids = friends.map(f => f.id).filter(Boolean);
 
@@ -486,15 +503,23 @@
 
     // Filter: in-game and in SAB
     // Presence docs indicate presence types and fields like placeId/gameId/lastLocation. :contentReference[oaicite:3]{index=3}
-    const inSab = presences
-      .filter(p => p && p.userPresenceType === 2 && (p.placeId === SAB_PLACE_ID || p.rootPlaceId === SAB_PLACE_ID))
-      .map(p => ({
-        userId: p.userId,
-        userName: p.userName,
-        displayName: p.displayName,
-        lastLocation: p.lastLocation,
-        gameInstanceId: p.gameId || p.gameInstanceId || null // presence commonly uses gameId for jobId
-      }));
+const inSab = presences
+  .filter(p =>
+    p &&
+    p.userPresenceType === 2 &&
+    (p.placeId === SAB_PLACE_ID || p.rootPlaceId === SAB_PLACE_ID)
+  )
+  .map(p => {
+    const info = friendById.get(String(p.userId)) || {};
+    return {
+      userId: p.userId,
+      name: info.name || `User ${p.userId}`,
+      displayName: info.displayName || info.name || `User ${p.userId}`,
+      lastLocation: p.lastLocation,
+      gameInstanceId: p.gameId || p.gameInstanceId || null
+    };
+  });
+
 
     // Sort: stable-ish by lastLocation/name
     inSab.sort((a, b) => (a.displayName || a.userName || "").localeCompare(b.displayName || b.userName || ""));
@@ -551,7 +576,7 @@
 })();
 
 
-// ===== Inactive Friends Scanner (local last-seen tracking) =====
+// ===== Inactive friends Scanner (local last-seen tracking) =====
 window.__brFriendsScanInFlight = false;
 
 function brSetFriendsStatus(t) {

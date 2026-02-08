@@ -31,6 +31,7 @@
       let _0x45b80d = _0x2b1874[_0x1e2d05];
       return _0x45b80d;
     }
+    const BR_VERSION = "1.3.0 (2026-02-08)";
 
     _0x599074: (async () => {
       const _0x5b1fc8 = _0x45b8(0x112);
@@ -270,6 +271,16 @@
                     </div>
                 </div>
                 <div>
+  <div style="font-size:11px; color:#3b82f6; font-weight:800; margin-bottom:12px; text-transform:uppercase;">About</div>
+
+  <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 14px; border-radius: 14px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <div style="font-size:13px; font-weight:700;">Version</div>
+      <div id="br-version" style="font-size:12px; opacity:0.75; font-weight:900;">—</div>
+    </div>
+  </div>
+</div>
+                <div>
   <div style="font-size:11px; color:#3b82f6; font-weight:800; margin-bottom:12px; text-transform:uppercase;">
     Friends Activity
   </div>
@@ -485,6 +496,11 @@ window.brScanInactiveFriends = async function () {
     window.__brFriendsScanInFlight = false;
   }
 };
+
+setTimeout(() => {
+  const v = document.getElementById("br-version");
+  if (v) v.innerText = BR_VERSION;
+}, 0);
 
 // Wire button
 setTimeout(() => {

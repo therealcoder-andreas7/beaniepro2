@@ -270,6 +270,33 @@
                     </div>
                 </div>
                 <div>
+  <div style="font-size:11px; color:#3b82f6; font-weight:800; margin-bottom:12px; text-transform:uppercase;">
+    Friends Activity
+  </div>
+
+  <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 14px; border-radius: 14px;">
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:600;">Show inactive for</div>
+      <input id="br-inactive-days" type="number" min="1" value="30"
+        style="width:80px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.04); color:#fff;">
+      <div style="font-size:13px;font-weight:600;">days+</div>
+
+      <button id="br-scan-friends"
+        style="margin-left:auto; padding:8px 10px; border-radius:12px; border:1px solid rgba(255,255,255,0.10);
+               background:rgba(255,255,255,0.04); color:#fff; cursor:pointer; font-weight:800;">
+        Scan
+      </button>
+    </div>
+
+    <div id="br-friends-status" style="font-size:12px; opacity:0.7; margin-bottom:10px;">Idle.</div>
+    <div id="br-inactive-list" style="max-height:170px; overflow:auto; display:flex; flex-direction:column; gap:8px;"></div>
+
+    <div style="font-size:10px; opacity:0.45; margin-top:10px; line-height:1.3;">
+      Note: Roblox doesn’t reliably provide exact “last played”. This list uses the last time BeaniePro observed a friend online and saves it locally.
+    </div>
+  </div>
+</div>
+                <div>
                     <div style="font-size:11px; color:#3b82f6; font-weight:800; margin-bottom:12px; text-transform:uppercase;">extra</div>
                     <div class="social-grid">
                         <div class="social-btn" id="br-accept-all">
@@ -303,6 +330,167 @@
 
         }
       }, 0);
+
+// ===== Inactive Friends Scanner (local last-seen tracking) =====
+window.__brFriendsScanInFlight = false;
+
+function brSetFriendsStatus(t) {
+  const el = document.getElementById("br-friends-status");
+  if (el) el.innerText = t;
+}
+
+function brReadLastSeenMap() {
+  try { return JSON.parse(localStorage.getItem("__brFriendLastSeen") || "{}"); }
+  catch { return {}; }
+}
+function brWriteLastSeenMap(map) {
+  try { localStorage.setItem("__brFriendLastSeen", JSON.stringify(map)); } catch {}
+}
+
+async function brGetAuthedUserId() {
+  const meRes = await fetch("https://users.roblox.com/v1/users/authenticated", { credentials: "include" });
+  if (!meRes.ok) throw new Error("Not logged in.");
+  const me = await meRes.json();
+  return me.id;
+}
+
+// Friends list: try paginated /friends/find first (works better beyond 200 in many cases), fallback to /friends
+async function brFetchAllFriends(userId, limit = 1000) {
+  const friends = [];
+  let cursor = "";
+  // Try /friends/find (cursor pagination)
+  try {
+    while (friends.length < limit) {
+      const url = `https://friends.roblox.com/v1/users/${userId}/friends/find?limit=50` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("friends/find failed");
+      const json = await res.json();
+
+      const items = json.PageItems || json.data || [];
+      for (const it of items) friends.push(it);
+      cursor = json.NextCursor || json.nextPageCursor || json.nextCursor || "";
+      if (!cursor || items.length === 0) break;
+    }
+    if (friends.length) return friends;
+  } catch (e) {
+    // ignore; fallback below
+  }
+
+  // Fallback (may cap at 200 depending on Roblox behavior)
+  const res = await fetch(`https://friends.roblox.com/v1/users/${userId}/friends`, { credentials: "include" });
+  if (!res.ok) throw new Error("Failed fetching friends.");
+  const json = await res.json();
+  return Array.isArray(json.data) ? json.data : [];
+}
+
+// Presence batch lookup
+async function brPresenceBatch(userIds) {
+  const res = await fetch("https://presence.roblox.com/v1/presence/users", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userIds })
+  });
+  if (!res.ok) throw new Error(`Presence failed (${res.status}).`);
+  const json = await res.json();
+  return Array.isArray(json.userPresences) ? json.userPresences : [];
+}
+
+function brDaysAgo(ts) {
+  const d = Math.floor((Date.now() - ts) / (1000 * 60 * 60 * 24));
+  return d < 0 ? 0 : d;
+}
+
+function brRenderInactiveList(rows) {
+  const list = document.getElementById("br-inactive-list");
+  if (!list) return;
+
+  if (!rows.length) {
+    list.innerHTML = `<div style="font-size:12px; opacity:0.6;">No matches.</div>`;
+    return;
+  }
+
+  list.innerHTML = rows.map(r => {
+    const name = (r.name && r.name.trim()) ? r.name : (r.displayName && r.displayName.trim()) ? r.displayName : `User ${r.id}`;
+    const badge = r.lastSeen ? `${brDaysAgo(r.lastSeen)}d` : "unknown";
+    return `
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;
+                  padding:10px; border-radius:12px; border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.02);">
+        <div style="font-size:12px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${name}</div>
+        <div style="font-size:11px; opacity:0.75; font-weight:900;">${badge}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+// Main scan (updates local last-seen when friend is online)
+window.brScanInactiveFriends = async function () {
+  if (window.__brFriendsScanInFlight) return;
+  window.__brFriendsScanInFlight = true;
+
+  const btn = document.getElementById("br-scan-friends");
+  const prevText = btn ? btn.innerText : null;
+  if (btn) { btn.innerText = "Scanning…"; btn.style.opacity = "0.7"; btn.style.pointerEvents = "none"; }
+
+  try {
+    brSetFriendsStatus("Loading your account…");
+    const meId = await brGetAuthedUserId();
+
+    brSetFriendsStatus("Fetching friends…");
+    const friends = await brFetchAllFriends(meId, 1200);
+
+    const days = Math.max(1, parseInt(document.getElementById("br-inactive-days")?.value || "30", 10));
+    brSetFriendsStatus(`Checking presence for ${friends.length} friends…`);
+
+    const lastSeenMap = brReadLastSeenMap();
+
+    // Batch presence calls (gentle pacing)
+    const ids = friends.map(f => f.id).filter(Boolean);
+    const chunkSize = 50;
+
+    for (let i = 0; i < ids.length; i += chunkSize) {
+      const chunk = ids.slice(i, i + chunkSize);
+      const presences = await brPresenceBatch(chunk);
+
+      for (const p of presences) {
+        // userPresenceType: 0 = offline, >0 = online in some form
+        if (p && p.userId && p.userPresenceType && p.userPresenceType !== 0) {
+          lastSeenMap[String(p.userId)] = Date.now();
+        }
+      }
+
+      // small delay to reduce 429 risk
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    brWriteLastSeenMap(lastSeenMap);
+
+    // Build inactive list
+    const thresholdMs = days * 24 * 60 * 60 * 1000;
+    const rows = friends.map(f => {
+      const lastSeen = lastSeenMap[String(f.id)] ? Number(lastSeenMap[String(f.id)]) : null;
+      return { ...f, lastSeen };
+    }).filter(r => {
+      if (!r.lastSeen) return true; // unknown -> show (you can change this if you want)
+      return (Date.now() - r.lastSeen) >= thresholdMs;
+    }).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0)); // unknown last
+
+    brRenderInactiveList(rows);
+    brSetFriendsStatus(`Done. Showing ${rows.length} (inactive/unknown ≥ ${days}d).`);
+  } catch (err) {
+    console.error(err);
+    brSetFriendsStatus(`Error: ${err.message}`);
+  } finally {
+    if (btn) { btn.innerText = prevText; btn.style.opacity = ""; btn.style.pointerEvents = ""; }
+    window.__brFriendsScanInFlight = false;
+  }
+};
+
+// Wire button
+setTimeout(() => {
+  const b = document.getElementById("br-scan-friends");
+  if (b) b.onclick = () => window.brScanInactiveFriends();
+}, 0);
 
 
       window.renderPSCountInSettings("Loading…");

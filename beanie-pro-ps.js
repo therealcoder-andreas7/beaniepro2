@@ -434,6 +434,46 @@
     throw new Error("Rate limited (429). Try again later.");
   }
 
+  function normalizeFriendId(f) {
+    return f?.id ?? f?.userId ?? null;
+  }
+
+  function normalizeFriendName(f) {
+    return f?.name || f?.username || f?.userName || null;
+  }
+
+  function normalizeFriendDisplayName(f) {
+    return f?.displayName || f?.display_name || f?.nameForDisplay || normalizeFriendName(f) || null;
+  }
+
+  async function fetchUsersMetaByIds(userIds) {
+    const out = new Map();
+    const chunkSize = 100;
+
+    for (let i = 0; i < userIds.length; i += chunkSize) {
+      const chunk = userIds.slice(i, i + chunkSize);
+      const res = await fetch("https://users.roblox.com/v1/users", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userIds: chunk, excludeBannedUsers: false })
+      });
+      if (!res.ok) throw new Error(`Users lookup failed (${res.status}).`);
+
+      const json = await res.json();
+      const data = Array.isArray(json.data) ? json.data : [];
+      for (const u of data) {
+        out.set(String(u.id), {
+          name: u.name || null,
+          displayName: u.displayName || u.name || null
+        });
+      }
+      await new Promise(r => setTimeout(r, 120));
+    }
+
+    return out;
+  }
+
   function renderFriendsOnline(rows) {
     const host = $("br-friends-list");
     if (!host) return;
@@ -474,20 +514,36 @@
     setFriendsStatus("Fetching friends…");
     const friends = await fetchAllFriends(meId, 1500);
 
-
-// 🔹 Build id → name map
-const friendById = new Map(
-  friends.map(f => [
-    String(f.id),
-    {
-      name: f.name,
-      displayName: f.displayName
+    // Build id -> name map from friends payload (supports multiple field shapes)
+    const friendById = new Map();
+    for (const f of friends) {
+      const fid = normalizeFriendId(f);
+      if (!fid) continue;
+      friendById.set(String(fid), {
+        name: normalizeFriendName(f),
+        displayName: normalizeFriendDisplayName(f)
+      });
     }
-  ])
-);
 
     setFriendsStatus(`Checking presence (${friends.length})…`);
-    const ids = friends.map(f => f.id).filter(Boolean);
+    const ids = friends.map(normalizeFriendId).filter(Boolean);
+
+    // Backfill missing names via users API when friends/find omits name fields
+    const missingNameIds = ids.filter(id => {
+      const info = friendById.get(String(id));
+      return !info || (!info.name && !info.displayName);
+    });
+    if (missingNameIds.length) {
+      setFriendsStatus(`Resolving names… ${missingNameIds.length}`);
+      const meta = await fetchUsersMetaByIds(missingNameIds);
+      for (const [id, info] of meta.entries()) {
+        const prev = friendById.get(id) || {};
+        friendById.set(id, {
+          name: prev.name || info.name || null,
+          displayName: prev.displayName || info.displayName || info.name || null
+        });
+      }
+    }
 
     const chunkSize = 50;
     const presences = [];

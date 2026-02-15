@@ -452,23 +452,45 @@
 
     for (let i = 0; i < userIds.length; i += chunkSize) {
       const chunk = userIds.slice(i, i + chunkSize);
-      const res = await fetch("https://users.roblox.com/v1/users", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userIds: chunk, excludeBannedUsers: false })
-      });
-      if (!res.ok) throw new Error(`Users lookup failed (${res.status}).`);
+      let success = false;
 
-      const json = await res.json();
-      const data = Array.isArray(json.data) ? json.data : [];
-      for (const u of data) {
-        out.set(String(u.id), {
-          name: u.name || null,
-          displayName: u.displayName || u.name || null
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const res = await fetch("https://users.roblox.com/v1/users", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userIds: chunk, excludeBannedUsers: false })
         });
+
+        if (res.status === 429) {
+          const retryAfter = Number(res.headers.get("Retry-After"));
+          const waitMs = Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter * 1000
+            : (800 * (2 ** attempt)) + Math.floor(Math.random() * 250);
+          await new Promise(r => setTimeout(r, waitMs));
+          continue;
+        }
+
+        if (!res.ok) break;
+
+        const json = await res.json();
+        const data = Array.isArray(json.data) ? json.data : [];
+        for (const u of data) {
+          out.set(String(u.id), {
+            name: u.name || null,
+            displayName: u.displayName || u.name || null
+          });
+        }
+        success = true;
+        break;
       }
-      await new Promise(r => setTimeout(r, 120));
+
+      // If a chunk stays rate-limited/fails, continue with partial names.
+      if (!success) {
+        console.warn("BeaniePro: users lookup chunk skipped due to API limits.");
+      }
+
+      await new Promise(r => setTimeout(r, 180));
     }
 
     return out;

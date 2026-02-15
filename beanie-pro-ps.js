@@ -143,11 +143,15 @@
             font-family: 'Plus Jakarta Sans', sans-serif;
             box-shadow: 0 40px 100px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.08);
             display:flex; flex-direction:column; overflow:hidden;
+            overscroll-behavior: contain;
             transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
             top: 20px; right: 20px;
             font-size: calc(14px * var(--br-scale));
         }
         #br-header { padding:calc(20px * var(--br-scale)); border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.01); }
+        #br-view-servers, #br-view-friends { flex: 1; min-height: 0; overscroll-behavior: contain; }
+        #br-view-servers { display: flex; flex-direction: column; }
+        #br-view-friends { display: none; flex-direction: column; padding: 16px; overflow-y: auto; }
         #br-list { flex:1; overflow-y:auto; padding:calc(16px * var(--br-scale)); display: flex; flex-direction: column; gap: calc(10px * var(--br-scale)); scrollbar-width:none; }
         #br-list::-webkit-scrollbar { display:none; }
         
@@ -237,11 +241,11 @@
   </button>
 </div>
 
-<div id="br-view-servers" style="display:block;">
+<div id="br-view-servers" style="display:flex;">
   <div id="br-list"></div>
 </div>
 
-<div id="br-view-friends" style="display:none; padding:16px; overflow:auto; flex:1;">
+<div id="br-view-friends">
   <div style="display:flex; gap:10px; align-items:center; margin-bottom:12px;">
     <div id="br-friends-status" style="font-size:12px; opacity:0.7;">Idle.</div>
     <button id="br-friends-refresh" class="icon-btn" title="Refresh friends presence"
@@ -534,12 +538,12 @@ const inSab = presences
 
     if (which === "friends") {
       if (serversView) serversView.style.display = "none";
-      if (friendsView) friendsView.style.display = "block";
+      if (friendsView) friendsView.style.display = "flex";
       if (serversBtn) serversBtn.style.cssText += activeCss;
       if (friendsBtn) friendsBtn.style.cssText += activeCss;
       if (serversBtn) serversBtn.style.cssText = serversBtn.style.cssText.replace(activeCss, idleCss);
     } else {
-      if (serversView) serversView.style.display = "block";
+      if (serversView) serversView.style.display = "flex";
       if (friendsView) friendsView.style.display = "none";
       if (friendsBtn) friendsBtn.style.cssText = friendsBtn.style.cssText.replace(activeCss, idleCss);
       if (serversBtn) serversBtn.style.cssText += activeCss;
@@ -567,6 +571,20 @@ const inSab = presences
         setFriendsStatus(`Error: ${e.message}`);
       });
     };
+
+    const containWheelAtBoundary = (el) => {
+      if (!el) return;
+      el.addEventListener("wheel", (e) => {
+        const dy = e.deltaY;
+        if (!dy) return;
+        const atTop = el.scrollTop <= 0;
+        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+        if ((dy < 0 && atTop) || (dy > 0 && atBottom)) e.preventDefault();
+      }, { passive: false });
+    };
+
+    containWheelAtBoundary($("br-list"));
+    containWheelAtBoundary($("br-view-friends"));
   }, 0);
 })();
 

@@ -39,11 +39,34 @@
         'c': '',
         'ld': false,
         'sv': [],
-        'f': { 'o': true, 'oo': false },
+        'f': { 'o': true, 'oo': false, 'q': '', 'favOnly': false },
         'pos': 0x0
       };
 
-      window.blockedOwners = new Set();
+      const BR_FAV_KEY = "__brFavServers";
+      const BR_BLOCK_KEY = "__brBlockedOwnersPermanent";
+      const brReadSet = (key) => {
+        try {
+          const raw = JSON.parse(localStorage.getItem(key) || "[]");
+          return new Set(Array.isArray(raw) ? raw.map(v => String(v)) : []);
+        } catch {
+          return new Set();
+        }
+      };
+      const brWriteSet = (key, setObj) => {
+        try { localStorage.setItem(key, JSON.stringify([...setObj])); } catch { }
+      };
+      const brEscape = (value) => String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+
+      window.blockedOwners = brReadSet(BR_BLOCK_KEY);
+      window.favoriteServers = brReadSet(BR_FAV_KEY);
+      window.persistBlockedOwners = () => brWriteSet(BR_BLOCK_KEY, window.blockedOwners);
+      window.persistFavoriteServers = () => brWriteSet(BR_FAV_KEY, window.favoriteServers);
       window.seenServers = new Set();
       window[_0x45b8(0x136)] = window[_0x45b8(0x136)] || {};
 
@@ -97,8 +120,8 @@
 
 
       window.removeSrv = async (serverId, ownerId) => {
-        if (ownerId) window.blockedOwners.add(parseInt(ownerId));
         if (ownerId) window.blockedOwners.add(String(ownerId));
+        window.persistBlockedOwners();
 
         _0x18088c.sv = _0x18088c.sv.filter(s => {
           const isTargetServer = s.accessCode === serverId;
@@ -119,6 +142,22 @@
             });
           } catch (err) { }
         }
+      };
+      window.toggleFavoriteServer = (serverId) => {
+        const key = String(serverId || "");
+        if (!key) return;
+        if (window.favoriteServers.has(key)) window.favoriteServers.delete(key);
+        else window.favoriteServers.add(key);
+        window.persistFavoriteServers();
+        _0x205713();
+      };
+      window.blockOwnerPermanent = (ownerId) => {
+        const key = String(ownerId || "");
+        if (!key) return;
+        window.blockedOwners.add(key);
+        window.persistBlockedOwners();
+        _0x18088c.sv = _0x18088c.sv.filter(s => String(s?.owner?.id || "") !== key);
+        _0x205713();
       };
 
       const _0x18ed43 = () => {
@@ -242,6 +281,16 @@
 </div>
 
 <div id="br-view-servers" style="display:flex;">
+  <div style="padding:12px 16px 0 16px; border-bottom:1px solid rgba(255,255,255,0.06);">
+    <div style="display:flex; gap:8px;">
+      <input id="br-server-search" type="text" placeholder="Search server/owner..."
+        style="flex:1; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.04); color:#fff; font-weight:600;">
+      <button id="br-fav-only"
+        style="padding:0 12px; border-radius:12px; border:1px solid rgba(255,255,255,0.12); background:rgba(255,255,255,0.04); color:#fff; cursor:pointer; font-weight:900;">
+        ⭐
+      </button>
+    </div>
+  </div>
   <div id="br-list"></div>
 </div>
 
@@ -884,6 +933,7 @@ setTimeout(() => {
 
       const _0x205713 = () => {
         const _0x2052e1 = document[_0x45b8(0x125)](_0x45b8(0xfe));
+        const searchQuery = String(_0x18088c.f.q || "").trim().toLowerCase();
 
         const _0x56e80d = _0x18088c.sv[_0x45b8(0x119)](_0xf260de => {
           const _0x374574 = _0xf260de[_0x45b8(0x144)]?.[_0x45b8(0x111)] || _0xf260de[_0x45b8(0x113)]?.['length'] || 0x0;
@@ -892,20 +942,40 @@ setTimeout(() => {
           const _0x54f8ec = _0xf260de[_0x45b8(0x113)]?.['some'](_0x45c681 => _0x45c681.id === _0xf260de.owner?.['id']);
           const passSettings = (!_0x18088c.f.o || !_0x54f8ec) && (!_0x18088c.f.oo || _0x374574 === 0x1);
 
-          const ownerId = _0xf260de.owner?.id;
+          const ownerId = String(_0xf260de.owner?.id || "");
           const isBlocked = ownerId && window.blockedOwners.has(ownerId);
+          const isFav = window.favoriteServers.has(String(_0xf260de.accessCode || ""));
+
+          if (_0x18088c.f.favOnly && !isFav) return false;
+
+          if (searchQuery) {
+            const serverName = String(_0xf260de.name || "").toLowerCase();
+            const ownerName = String(_0xf260de.owner?.name || "").toLowerCase();
+            const ownerDisplayName = String(_0xf260de.owner?.displayName || "").toLowerCase();
+            const inSearch = serverName.includes(searchQuery) || ownerName.includes(searchQuery) || ownerDisplayName.includes(searchQuery);
+            if (!inSearch) return false;
+          }
 
           return passSettings && !isBlocked;
         });
 
         if (!_0x56e80d || _0x56e80d.length === 0) {
-          _0x2052e1.innerHTML = "<div style=\"text-align:center; opacity:0.4; margin-top:60px; font-size:13px; font-weight:600;\">Scanning for servers...</div>";
+          _0x2052e1.innerHTML = "<div style=\"text-align:center; opacity:0.4; margin-top:60px; font-size:13px; font-weight:600;\">No servers matching filters.</div>";
           return;
         }
 
-        const _0x6eda97 = _0x56e80d[_0x45b8(0x123)](_0x3cecd9 => {
+        const sortedRows = _0x56e80d.slice().sort((a, b) => {
+          const aFav = window.favoriteServers.has(String(a.accessCode || "")) ? 1 : 0;
+          const bFav = window.favoriteServers.has(String(b.accessCode || "")) ? 1 : 0;
+          return bFav - aFav;
+        });
+
+        const _0x6eda97 = sortedRows[_0x45b8(0x123)](_0x3cecd9 => {
           const _0x8c0c30 = _0x3cecd9[_0x45b8(0x144)]?.['length'] || _0x3cecd9[_0x45b8(0x113)]?.[_0x45b8(0x111)] || 0x0;
           const _0x678f2e = _0x3cecd9[_0x45b8(0x113)]?.['some'](_0x2d326b => _0x2d326b.id === _0x3cecd9.owner?.['id']);
+          const ownerId = String(_0x3cecd9.owner?.id || "");
+          const isFav = window.favoriteServers.has(String(_0x3cecd9.accessCode || ""));
+          const ownerLabel = _0x3cecd9.owner?.displayName || _0x3cecd9.owner?.name || "";
           let _0x2fa43e = '';
           if (window[_0x45b8(0x136)][_0x3cecd9[_0x45b8(0x143)]]) {
             const _0x471fea = _0x2ffe6d(Date[_0x45b8(0x109)]() - window.joinTimes[_0x3cecd9.accessCode]);
@@ -922,11 +992,16 @@ setTimeout(() => {
                  </div>
             </div>
             <div style="font-size:calc(15px * var(--br-scale)); font-weight:700; color:#fff; margin-top:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
-                ${_0x3cecd9.name || "Private Session"}
+                ${brEscape(_0x3cecd9.name || "Private Session")}
+            </div>
+            <div style="font-size:12px; opacity:0.7; margin-top:4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                ${ownerLabel ? `Owner: ${brEscape(ownerLabel)}` : 'Owner: Unknown'}
             </div>
             
             <div class="btn-row">
                 <button class="join-btn" onclick="window.joinSrv('${_0x5b1fc8}','${_0x3cecd9.accessCode}')">Join Server</button>
+                <button class="remove-btn" title="Favorite server" style="background:${isFav ? 'rgba(250, 204, 21, 0.18)' : 'rgba(255,255,255,0.06)'}; color:${isFav ? '#facc15' : '#fff'}; border-color:${isFav ? 'rgba(250, 204, 21, 0.35)' : 'rgba(255,255,255,0.14)'};" onclick="window.toggleFavoriteServer('${_0x3cecd9.accessCode}')">⭐</button>
+                <button class="remove-btn" title="Permanent block owner" onclick="window.blockOwnerPermanent('${ownerId}')">🚫</button>
                 <button class="remove-btn" title="Unfriend & Block" onclick="window.removeSrv('${_0x3cecd9.accessCode}','${_0x3cecd9.owner?.id || ''}')">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 </button>
@@ -1037,6 +1112,27 @@ setTimeout(() => {
         _0x18088c.f.oo = _0x3604dd[_0x45b8(0xf9)][_0x45b8(0x115)];
         _0x205713();
       };
+      const searchInput = document.getElementById('br-server-search');
+      if (searchInput) {
+        searchInput.oninput = (e) => {
+          _0x18088c.f.q = String(e.target?.value || "");
+          _0x205713();
+        };
+      }
+      const favOnlyBtn = document.getElementById('br-fav-only');
+      if (favOnlyBtn) {
+        const updateFavBtn = () => {
+          favOnlyBtn.style.background = _0x18088c.f.favOnly ? "rgba(250, 204, 21, 0.18)" : "rgba(255,255,255,0.04)";
+          favOnlyBtn.style.borderColor = _0x18088c.f.favOnly ? "rgba(250, 204, 21, 0.35)" : "rgba(255,255,255,0.12)";
+          favOnlyBtn.style.color = _0x18088c.f.favOnly ? "#facc15" : "#fff";
+        };
+        updateFavBtn();
+        favOnlyBtn.onclick = () => {
+          _0x18088c.f.favOnly = !_0x18088c.f.favOnly;
+          updateFavBtn();
+          _0x205713();
+        };
+      }
       document.getElementById('br-font-scaler').oninput = (e) => {
         document.getElementById('br-lite-root').style.setProperty('--br-scale', e.target.value);
       };
